@@ -81,13 +81,11 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
     let open Lwt.Infix in
     B.read t.base src_sector [ cluster ]
     >>= function
-    | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
     | Error `Disconnected -> Lwt.return (Error `Disconnected)
     | Error e -> Format.kasprintf Lwt.fail_with "Unknown error: %a" B.pp_error e
     | Ok () ->
       B.write t.base dst_sector [ cluster ]
       >>= function
-      | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
       | Error `Disconnected -> Lwt.return (Error `Disconnected)
       | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
       | Error e -> Format.kasprintf Lwt.fail_with "Unknown error: %a" B.pp_write_error e
@@ -134,7 +132,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
              end else begin
                copy_already_locked t src dst
                >>= function
-               | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
                | Error `Disconnected -> Lwt.return (Error `Disconnected)
                | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
                | Error e -> Format.kasprintf Lwt.fail_with "Unknown error: %a" B.pp_write_error e
@@ -162,7 +159,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
   let erase t remaining =
     let open Lwt.Infix in
     let intervals = Cluster.IntervalSet.fold (fun i acc -> i :: acc) remaining [] in
-    let buffer_size_clusters = Int64.of_int (Cstruct.len t.zero_buffer) |> t.cluster_bits in
+    let buffer_size_clusters = Int64.of_int (Cstruct.length t.zero_buffer) |> t.cluster_bits in
 
     Lwt_list.fold_left_s
       (fun acc i -> match acc with
@@ -549,7 +546,6 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
         begin update_references t
           >>= function
           | Error (`Msg x) -> Lwt.fail_with x
-          | Error `Unimplemented -> Lwt.fail_with "Unimplemented"
           | Error `Disconnected -> Lwt.fail_with "Disconnected"
           | Error `Is_read_only -> Lwt.fail_with "Is_read_only"
           | Ok nr_updated ->

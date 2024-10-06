@@ -17,8 +17,6 @@
 
 (** Common error reporting functions *)
 
-open Result
-
 type error = [
   | `Msg of string (** A fatal error condition; the string should be logged *)
 ]
@@ -36,15 +34,15 @@ val any: (unit, 'b) result list -> (unit, 'b) result
 module Lwt_error: sig
   module Infix: sig
     val ( >>= ) :
-      ('a, [< `Disconnected | `Msg of 'b | `Unimplemented ]) result Lwt.t ->
+      ('a, [< `Disconnected | `Msg of 'b ]) result Lwt.t ->
       ('a ->
-       ('c, [> `Disconnected | `Msg of 'b | `Unimplemented ] as 'd) result
+       ('c, [> `Disconnected | `Msg of 'b ] as 'd) result
          Lwt.t) ->
       ('c, 'd) result Lwt.t
   end
 
   val or_fail_with :
-    ('a, [< `Disconnected | `Msg of string | `Unimplemented ]) result Lwt.t ->
+    ('a, [< `Disconnected | `Msg of string ]) result Lwt.t ->
     'a Lwt.t
 
   module List: sig
@@ -60,18 +58,18 @@ module Lwt_write_error : sig
   module Infix: sig
   val ( >>= ) :
     ('a,
-     [< `Disconnected | `Is_read_only | `Msg of 'b | `Unimplemented ])
+     [< `Disconnected | `Is_read_only | `Msg of 'b ])
       result Lwt.t ->
     ('a ->
      ('c,
-      [> `Disconnected | `Is_read_only | `Msg of 'b | `Unimplemented ]
+      [> `Disconnected | `Is_read_only | `Msg of 'b ]
       as 'd)
        result Lwt.t) ->
     ('c, 'd) result Lwt.t
 end
   val or_fail_with :
     ('a,
-     [< `Disconnected | `Is_read_only | `Msg of string | `Unimplemented ])
+     [< `Disconnected | `Is_read_only | `Msg of string ])
       result Lwt.t -> 'a Lwt.t
 end
 

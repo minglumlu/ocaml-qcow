@@ -324,7 +324,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
                   let open Lwt.Infix in
                   loop 0
                   >>= function
-                  | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
                   | Error `Disconnected -> Lwt.return (Error `Disconnected)
                   | Error `Is_read_only -> Lwt.return (Error (`Msg "Device is read only"))
                   | Error (`Msg m) -> Lwt.return (Error (`Msg m))
@@ -853,12 +852,12 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
     | buf :: bufs ->
       (* If we're not aligned, sync to the next boundary *)
       let into = Int64.(to_int (sub alignment (rem ofs alignment))) in
-      if Cstruct.len buf > into then begin
+      if Cstruct.length buf > into then begin
         let this = ofs, Cstruct.sub buf 0 into in
         let rest = chop_into_aligned alignment Int64.(add ofs (of_int into)) (Cstruct.shift buf into :: bufs) in
         this :: rest
       end else begin
-        (ofs, buf) :: (chop_into_aligned alignment Int64.(add ofs (of_int (Cstruct.len buf))) bufs)
+        (ofs, buf) :: (chop_into_aligned alignment Int64.(add ofs (of_int (Cstruct.length buf))) bufs)
       end
 
   type work = {
@@ -1171,7 +1170,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
     with_deadline t describe_fn time_30s
       (fun () ->
         let open Lwt_error.Infix in
-        Counter.inc (Metrics.reads t.config.Config.id) (float_of_int @@ List.fold_left (+) 0 @@ List.map Cstruct.len bufs);
+        Counter.inc (Metrics.reads t.config.Config.id) (float_of_int @@ List.fold_left (+) 0 @@ List.map Cstruct.length bufs);
         let sectors_per_cluster = (1 lsl t.cluster_bits) / t.sector_size in
         let client = Locks.Client.make describe_fn in
         let cluster_size = 1L <| t.cluster_bits in
@@ -1236,7 +1235,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
     else with_deadline t describe_fn time_30s
       (fun () ->
         let open Lwt_write_error.Infix in
-        Counter.inc (Metrics.writes t.config.Config.id) (float_of_int @@ List.fold_left (+) 0 @@ List.map Cstruct.len bufs);
+        Counter.inc (Metrics.writes t.config.Config.id) (float_of_int @@ List.fold_left (+) 0 @@ List.map Cstruct.length bufs);
         let cluster_size = 1L <| t.cluster_bits in
         let client = Locks.Client.make describe_fn in
         let sectors_per_cluster = (1 lsl t.cluster_bits) / t.sector_size in
@@ -1432,7 +1431,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
         (fun () ->
           B.read base sector [ buf ]
           >>= function
-          | Error (#Mirage_device.error as e) -> Lwt.return_error e
+          | Error (#Mirage_block.error as e) -> Lwt.return_error e
           | Error _ -> Lwt.fail_with "unknown error"
           | Ok () -> Lwt.return (Ok buf)
         ) (fun e ->
@@ -1451,7 +1450,6 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
           (fun () ->
             B.write base sector [ buf ]
             >>= function
-            | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
             | Error `Disconnected -> Lwt.return (Error `Disconnected)
             | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
             | Error _ -> Lwt.fail_with "unknown error"
@@ -1645,7 +1643,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
         let open Lwt_write_error.Infix in
         ( if not(t.config.Config.discard) then begin
             Log.err (fun f -> f "discard called but feature not implemented in configuration");
-            Lwt.return (Error `Unimplemented)
+            Lwt.return (Error `Disconnected)
           end else Lwt.return (Ok ()) )
         >>= fun () ->
         Counter.inc (Metrics.discards t.config.Config.id) Int64.(to_float @@ mul n @@ of_int t.sector_size);

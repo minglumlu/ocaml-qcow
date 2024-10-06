@@ -84,7 +84,7 @@ module Physical = struct
       | None -> ()
     end;
     Qcow_physical.write v (Cstruct.shift t.data (8 * n))
-  let len t = Cstruct.len t.data / 8
+  let len t = Cstruct.length t.data / 8
 end
 
 let erase cluster = Cstruct.memset cluster.data 0
@@ -137,6 +137,5 @@ let update ?client t cluster f =
        >>= function
        | Error `Is_read_only -> Lwt.return (Error `Is_read_only)
        | Error `Disconnected -> Lwt.return (Error `Disconnected)
-       | Error `Unimplemented -> Lwt.return (Error `Unimplemented)
        | Ok () -> Lwt.return (Ok result)
     )
