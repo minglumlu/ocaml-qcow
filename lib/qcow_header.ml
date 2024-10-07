@@ -347,8 +347,14 @@ let read rest =
   >>= fun (nb_snapshots, rest) ->
   Int64.read rest
   >>= fun (snapshots_offset, rest) ->
+  let t =
+    { version; backing_file_offset; backing_file_size; cluster_bits;
+      size; crypt_method; l1_size; l1_table_offset; refcount_table_offset;
+      refcount_table_clusters; nb_snapshots; snapshots_offset; additional=None;
+      extensions=[] }
+  in
   (match version with
-    | `One | `Two -> return (None, [], 72, rest)
+    | `One | `Two -> return (t, rest)
     | _ ->
       Int64.read rest
       >>= fun (incompatible_features, rest) ->
@@ -371,6 +377,17 @@ let read rest =
       >>= fun (refcount_order, rest) ->
       Int32.read rest
       >>= fun (header_length, rest) ->
+      let header_length = Int32.to_int header_length in
+      let additional =
+        Some { dirty; corrupt; lazy_refcounts; autoclear_features; refcount_order }
+      in
+      let header_length' = sizeof { t with additional } in
+      ( if header_length' <= header_length then
+          return (Cstruct.shift rest (header_length - header_length'))
+        else
+          error_msg "Read a header_length of %d less than we computed %d"
+            header_length header_length'
+      ) >>= fun rest ->
       let rec read_lowlevel rest =
         Int32.read rest
         >>= fun (kind, rest) ->
@@ -404,19 +421,8 @@ let read rest =
         Ok (extension :: acc)
       ) (Ok []) e
       >>= fun extensions ->
-      let header_length = Int32.to_int header_length in
-      return (Some { dirty; corrupt; lazy_refcounts; autoclear_features;
-                refcount_order }, extensions, header_length, rest)
-  ) >>= fun (additional, extensions, header_length, rest) ->
-  let t = { version; backing_file_offset; backing_file_size; cluster_bits;
-            size; crypt_method; l1_size; l1_table_offset; refcount_table_offset;
-            refcount_table_clusters; nb_snapshots; snapshots_offset; additional;
-            extensions } in
-  (* qemu excludes extensions from the header_length *)
-  if sizeof { t with extensions = [] } <> header_length
-  then error_msg "Read a header_length of %d but we computed %d" header_length (sizeof t)
-  else return (t, rest)
-
+      return ({ t with extensions; additional }, rest)
+  )
 
 let refcounts_per_cluster t =
   let cluster_bits = Int32.to_int t.cluster_bits in
