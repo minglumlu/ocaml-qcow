@@ -888,12 +888,17 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
   exception Reference_outside_file of int64 * int64
 
   let make_cluster_map t ?id () =
+    Printf.printf "MingL: %s at line#%d in %s\n" __FUNCTION__ __LINE__ __FILE__ ;
     let open Qcow_cluster_map in
     let sectors_per_cluster = Int64.(div (1L <| t.cluster_bits) (of_int t.sector_size)) in
+    Printf.printf "MingL: sectors_per_cluster %Ld\n" sectors_per_cluster ;
     let open Lwt.Infix in
     B.get_info t.base
     >>= fun base_info ->
+    Printf.printf "MingL: size_sectors %Ld\n" base_info.Mirage_block.size_sectors ;
+    let max_cluster' = Int64.div base_info.Mirage_block.size_sectors sectors_per_cluster in
     let max_cluster = Cluster.of_int64 @@ Int64.div base_info.Mirage_block.size_sectors sectors_per_cluster in
+    Printf.printf "MingL: max_cluster %Ld\n" max_cluster' ;
     (* Iterate over the all clusters referenced from all the tables in the file
        and (a) construct a set of free clusters; and (b) construct a map of
        physical cluster back to virtual. The free set will show us the holes,
@@ -902,13 +907,19 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
     let refs = ref Cluster.Map.empty in
 
     let refcount_start_cluster = Cluster.to_int64 @@ Physical.cluster ~cluster_bits:t.cluster_bits t.h.Header.refcount_table_offset in
+    Printf.printf "MingL: refcount_start_cluster %Ld\n" refcount_start_cluster ;
     let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in
+    Printf.printf "MingL: int64s_per_cluster %Ld\n" int64s_per_cluster ;
     let l1_table_start_cluster = Cluster.to_int64 @@ Physical.cluster ~cluster_bits:t.cluster_bits t.h.Header.l1_table_offset in
+    Printf.printf "MingL: l1_table_start_cluster %Ld\n" l1_table_start_cluster ;
     let l1_table_clusters = Int64.(div (round_up (of_int32 t.h.Header.l1_size) int64s_per_cluster) int64s_per_cluster) in
+    Printf.printf "MingL: l1_table_clusters %Ld\n" l1_table_clusters ;
     (* Assume all clusters are free. Note when the file is sparse we can exceed the max
        possible cluster. This is only a sanity check to catch crazily-wrong inputs. *)
     let cluster_size = 1L <| t.cluster_bits in
+    let max_possible_cluster' = (Int64.round_up t.h.Header.size cluster_size) |> t.cluster_bits in
     let max_possible_cluster = Cluster.of_int64 ((Int64.round_up t.h.Header.size cluster_size) |> t.cluster_bits) in
+    Printf.printf "MingL: max_possible_cluster %Ld\n" max_possible_cluster' ;
     let free = Qcow_bitmap.make_full
       ~initial_size:(Cluster.to_int max_cluster)
       ~maximum_size:(Cluster.to_int max_possible_cluster * 50) in
@@ -924,6 +935,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
         Cluster.of_int64 @@ Qcow_bitmap.min_elt free
       with
       | Not_found -> max_cluster (* header takes up the whole file *) in
+    Printf.printf "MingL: first_movable_cluster %Ld\n" (Cluster.to_int64 first_movable_cluster) ;
     let parse x =
       if x = Physical.unmapped
       then Cluster.zero
@@ -956,16 +968,26 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
       if i >= Int64.of_int32 t.h.Header.refcount_table_clusters
       then Lwt.return (Ok ())
       else begin
-        let refcount_cluster = Cluster.of_int64 @@ Int64.(add refcount_start_cluster i) in
-        Metadata.read t.metadata refcount_cluster
+        let refcount_table_cluster = Cluster.of_int64 @@ Int64.(add refcount_start_cluster i) in
+        let refcount_table_cluster' = Cluster.to_int64 refcount_table_cluster in
+        Printf.printf "MingL: the %Ldth refcount table cluster occupies the %Ldth cluster\n" i refcount_table_cluster' ;
+        Metadata.read t.metadata refcount_table_cluster
           (fun c ->
             let addresses = Metadata.Physical.of_contents c in
             let rec loop i =
               if i >= (Metadata.Physical.len addresses)
               then Lwt.return (Ok ())
               else begin
-                let cluster = parse (Metadata.Physical.get addresses i) in
-                mark (refcount_cluster, i) cluster;
+                let parse_refcount_table_entry  x =
+                  if x = Physical.unmapped
+                  then Cluster.zero
+                  else Physical.cluster_in_refcount_table_entry ~cluster_bits:t.cluster_bits x
+                in
+                let refcount_block_cluster = parse_refcount_table_entry (Metadata.Physical.get addresses i) in
+                let refcount_block_cluster' = Cluster.to_int64 refcount_block_cluster in
+                if refcount_block_cluster' <> 0L then
+                  Printf.printf "MingL:   the %dth refcount table entry points to the %Ldth cluster\n" i refcount_block_cluster' ;
+                mark (refcount_table_cluster, i) refcount_block_cluster;
                 loop (i + 1)
               end in
             loop 0
@@ -982,6 +1004,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
       if i >= l1_table_clusters
       then Lwt.return (Ok ())
       else begin
+        let l1_table_cluster' = Cluster.to_int64 l1_table_cluster in
+        Printf.printf "MingL: the %Ldth L1 table cluster occupies the %Ldth cluster\n" i l1_table_cluster' ;
         Metadata.read t.metadata l1_table_cluster
           (fun c ->
             let l1 = Metadata.Physical.of_contents c in
@@ -992,8 +1016,17 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
           if i >= (Metadata.Physical.len l1)
           then Lwt.return (Ok ())
           else begin
-            let l2_table_cluster = parse (Metadata.Physical.get l1 i) in
+            let parse_l1_table_entry x =
+              if x = Physical.unmapped then
+                Cluster.zero
+              else
+                Physical.cluster_in_l1_table_entry ~cluster_bits:t.cluster_bits x
+            in
+            let l2_table_cluster = parse_l1_table_entry (Metadata.Physical.get l1 i) in
+            let l2_table_cluster' = parse (Metadata.Physical.get l1 i) in
             if l2_table_cluster <> Cluster.zero then begin
+              Printf.printf "MingL:   the %dth L1 table entry points to the %Ldth (%Ldth) cluster\n"
+                i (Cluster.to_int64 l2_table_cluster) (Cluster.to_int64 l2_table_cluster') ;
               mark (l1_table_cluster, i) l2_table_cluster;
               Metadata.read t.metadata l2_table_cluster
                 (fun c ->
@@ -1001,11 +1034,20 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
                   Lwt.return (Ok l2)
                 )
               >>= fun l2 ->
+              let parse_l2_table_entry x =
+                match Physical.is_compressed x with
+                | true ->
+                   failwith "compressed cluster!"
+                | false ->
+                   Physical.cluster_in_standard_l2_table_entry ~cluster_bits:t.cluster_bits x
+              in
               let rec data_iter i =
                 if i >= (Metadata.Physical.len l2)
                 then Lwt.return (Ok ())
                 else begin
-                  let cluster = parse (Metadata.Physical.get l2 i) in
+                  let cluster = parse_l2_table_entry (Metadata.Physical.get l2 i) in
+                  if cluster <> Cluster.zero then
+                    Printf.printf "MingL:     the %dth L2 table entry points to the %Ldth cluster\n" i (Cluster.to_int64 cluster) ;
                   mark (l2_table_cluster, i) cluster;
                   data_iter (i + 1)
                 end in
@@ -1392,6 +1434,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
   let disconnect t = B.disconnect t.base
 
   let make config base h =
+    Printf.printf "MingL: %s at line#%d in %s\n" __FUNCTION__ __LINE__ __FILE__ ;
     let open Lwt in
     B.get_info base
     >>= fun base_info ->
@@ -1542,6 +1585,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
     end
 
   let connect ?(config=Config.default ()) base =
+    Printf.printf "MingL: %s at line#%d in %s\n" __FUNCTION__ __LINE__ __FILE__ ;
     let open Lwt.Infix in
     B.get_info base
     >>= fun base_info ->
@@ -1553,6 +1597,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
       match Header.read sector with
       | Error (`Msg m) -> Lwt.fail_with m
       | Ok (h, _) ->
+        let sexp = Header.sexp_of_t h in
+        Printf.printf "%s\n" (Sexplib.Sexp.to_string_hum sexp) ;
         make config base h
         >>= fun t ->
         let open Qcow_cluster_map in

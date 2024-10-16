@@ -53,6 +53,15 @@ val to_bytes: t -> int
 val cluster: cluster_bits:int -> t -> Cluster.t
 (** Return the cluster containing the address *)
 
+val cluster_in_refcount_table_entry: cluster_bits:int -> t -> Cluster.t
+(** Return the cluster pointed by the refcount table entry *)
+
+val cluster_in_l1_table_entry: cluster_bits:int -> t -> Cluster.t
+(** Return the cluster pointed by the l1 table entry *)
+
+val cluster_in_standard_l2_table_entry: cluster_bits:int -> t -> Cluster.t
+(** Return the cluster pointed by the l2 table entry *)
+
 val within_cluster: cluster_bits:int -> t -> int
 (** Return the index within the cluster of the address *)
 

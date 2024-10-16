@@ -64,6 +64,24 @@ let cluster ~cluster_bits t =
   let x = (t <| 2) |> 2 in
   Cluster.(div x (one <| cluster_bits))
 
+let cluster_in_refcount_table_entry ~cluster_bits t =
+  let x = t |> 8 in
+  Cluster.(div x (one <| cluster_bits))
+
+let cluster_in_l1_table_entry ~cluster_bits t =
+  if t |> 63 = Cluster.zero then
+    Printf.printf "the 63th bit of L1 table entry: 0 for an L2 table that is unused or requires COW\n"
+  else
+    Printf.printf "the 63th bit of L1 table entry: 1 if its refcount is exactly one\n" ;
+  let x = (t <| 1) |> 9 in
+  Cluster.(div x (one <| cluster_bits))
+
+let cluster_in_standard_l2_table_entry = cluster
+
+let compressed_cluster ~cluster_bits t =
+  let x = (t <| 2) |> 2 in
+  Cluster.(div x (one <| cluster_bits))
+
 let within_cluster ~cluster_bits t =
   let x = (t <| 2) |> 2 in
   Cluster.(to_int (rem x (one <| cluster_bits))) / 8

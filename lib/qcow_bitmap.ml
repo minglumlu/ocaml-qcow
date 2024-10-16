@@ -33,6 +33,7 @@ let make_empty ~initial_size:len ~maximum_size:max_len =
 
 let make_full ~initial_size:len ~maximum_size:max_len =
   let bytes_required = (len + 7) / 8 in
+  Printf.printf "MingL: bytes_required %d\n" bytes_required ;
   let buf = Cstruct.create bytes_required in
   Cstruct.memset buf 0xff;
   { buf; len; max_len }

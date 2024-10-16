@@ -392,7 +392,10 @@ let read rest =
         Int32.read rest
         >>= fun (kind, rest) ->
         if kind = 0l
-        then return ([], rest)
+        then (
+          Printf.printf "MingL: extention type: End of the header extension area\n" ;
+          return ([], rest)
+        )
         else begin
           Int32.read rest
           >>= fun (len, rest) ->
@@ -407,19 +410,23 @@ let read rest =
         end in
       let parse_extension (kind, payload) = match kind with
         | 0xE2792ACAl -> Ok (`Backing_file (Cstruct.to_string payload))
+        | 0x23852875l -> (
+            Printf.printf "MingL: extention typ: Bitmaps\n" ;
+            Ok (`Unknown (kind, Cstruct.to_string payload))
+        )
         | 0x6803f857l ->
           Feature.read_all payload
           >>= fun features ->
           Ok (`Feature_name_table features)
         | _ -> Ok (`Unknown (kind, Cstruct.to_string payload)) in
       read_lowlevel rest
-      >>= fun (e, rest) ->
+      >>= fun (exts, rest) ->
       List.fold_left (fun acc x ->
         acc >>= fun acc ->
         parse_extension x
         >>= fun extension ->
         Ok (extension :: acc)
-      ) (Ok []) e
+      ) (Ok []) exts
       >>= fun extensions ->
       return ({ t with extensions; additional }, rest)
   )
