@@ -936,13 +936,12 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
       with
       | Not_found -> max_cluster (* header takes up the whole file *) in
     Printf.printf "MingL: first_movable_cluster %Ld\n" (Cluster.to_int64 first_movable_cluster) ;
-    let parse x =
-      if x = Physical.unmapped
-      then Cluster.zero
-      else Physical.cluster ~cluster_bits:t.cluster_bits x in
 
-    let mark rf cluster =
+    let mark ?(is_compressed=false) rf cluster =
       let c, w = rf in
+      if cluster <> Cluster.zero then
+        Printf.printf "MingL: mark %dth entry in %Ldth cluster (for metadata) for %Ldth cluster\n"
+          w (Cluster.to_int64 c) (Cluster.to_int64 cluster) ;
       if cluster > max_cluster then begin
         Log.err (fun f -> f "Found a reference to cluster %s outside the file (max cluster %s) from cluster %s.%d"
           (Cluster.to_string cluster) (Cluster.to_string max_cluster) (Cluster.to_string c) w);
@@ -951,16 +950,21 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
         raise (Reference_outside_file(src, dst))
       end;
       let c, w = rf in
-      if cluster = Cluster.zero then () else begin
-        if Cluster.Map.mem cluster !refs then begin
-          let c', w' = Cluster.Map.find cluster !refs in
-          Log.err (fun f -> f "Found two references to cluster %s: %s.%d and %s.%d"
-            (Cluster.to_string cluster) (Cluster.to_string c) w (Cluster.to_string c') w');
-          raise (Error.Duplicate_reference((Cluster.to_int64 c, w), (Cluster.to_int64 c', w'), Cluster.to_int64 cluster))
-        end;
+      if cluster = Cluster.zero then
+        ()
+      else (
+        if not is_compressed then (
+          if Cluster.Map.mem cluster !refs then begin
+            let c', w' = Cluster.Map.find cluster !refs in
+            Log.err (fun f -> f "Found two references to cluster %s: %s.%d and %s.%d"
+              (Cluster.to_string cluster) (Cluster.to_string c) w (Cluster.to_string c') w');
+            raise (Error.Duplicate_reference((Cluster.to_int64 c, w), (Cluster.to_int64 c', w'), Cluster.to_int64 cluster))
+          end
+        ) ;
         Qcow_bitmap.(remove (Interval.make (Cluster.to_int64 cluster) (Cluster.to_int64 cluster)) free);
         refs := Cluster.Map.add cluster rf !refs;
-      end in
+      )
+    in
 
     (* scan the refcount table *)
     let open Lwt_error.Infix in
@@ -1023,10 +1027,9 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
                 Physical.cluster_in_l1_table_entry ~cluster_bits:t.cluster_bits x
             in
             let l2_table_cluster = parse_l1_table_entry (Metadata.Physical.get l1 i) in
-            let l2_table_cluster' = parse (Metadata.Physical.get l1 i) in
             if l2_table_cluster <> Cluster.zero then begin
-              Printf.printf "MingL:   the %dth L1 table entry points to the %Ldth (%Ldth) cluster\n"
-                i (Cluster.to_int64 l2_table_cluster) (Cluster.to_int64 l2_table_cluster') ;
+              Printf.printf "MingL:   the %dth L1 table entry points to the %Ldth cluster\n"
+                i (Cluster.to_int64 l2_table_cluster) ;
               mark (l1_table_cluster, i) l2_table_cluster;
               Metadata.read t.metadata l2_table_cluster
                 (fun c ->
@@ -1034,21 +1037,34 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
                   Lwt.return (Ok l2)
                 )
               >>= fun l2 ->
-              let parse_l2_table_entry x =
-                match Physical.is_compressed x with
-                | true ->
-                   failwith "compressed cluster!"
-                | false ->
-                   Physical.cluster_in_standard_l2_table_entry ~cluster_bits:t.cluster_bits x
-              in
               let rec data_iter i =
                 if i >= (Metadata.Physical.len l2)
                 then Lwt.return (Ok ())
                 else begin
-                  let cluster = parse_l2_table_entry (Metadata.Physical.get l2 i) in
-                  if cluster <> Cluster.zero then
-                    Printf.printf "MingL:     the %dth L2 table entry points to the %Ldth cluster\n" i (Cluster.to_int64 cluster) ;
-                  mark (l2_table_cluster, i) cluster;
+                  let l2_entry = Metadata.Physical.get l2 i in
+                  let is_compressed = Physical.is_compressed l2_entry in
+                  let cluster =
+                    match is_compressed with
+                    | true -> (
+                        let cluster, host_offset, sectors =
+                          Physical.cluster_in_compressed_l2_table_entry ~cluster_bits:t.cluster_bits l2_entry
+                        in
+                        if cluster <> Cluster.zero then
+                          Printf.printf "MingL:     the %dth compressed L2 table entry points to the %Ldth cluster, host offset within the cluster=%Ld, sectors=%Ld\n"
+                            i (Cluster.to_int64 cluster) host_offset sectors ;
+                        cluster
+                    )
+                    | false -> (
+                        let cluster =
+                          Physical.cluster_in_standard_l2_table_entry ~cluster_bits:t.cluster_bits l2_entry
+                        in
+                        if cluster <> Cluster.zero then
+                          Printf.printf "MingL:     the %dth standard L2 table entry points to the %Ldth cluster\n"
+                            i (Cluster.to_int64 cluster) ;
+                        cluster
+                    )
+                  in
+                  mark ~is_compressed (l2_table_cluster, i) cluster;
                   data_iter (i + 1)
                 end in
               data_iter 0

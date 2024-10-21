@@ -69,18 +69,38 @@ let cluster_in_refcount_table_entry ~cluster_bits t =
   Cluster.(div x (one <| cluster_bits))
 
 let cluster_in_l1_table_entry ~cluster_bits t =
+  (*
+  Printf.printf "MingL\n" ;
   if t |> 63 = Cluster.zero then
-    Printf.printf "the 63th bit of L1 table entry: 0 for an L2 table that is unused or requires COW\n"
+    Printf.printf "MingL: the 63th bit of L1 table entry: 0 -> an L2 table that is unused or requires COW\n"
   else
-    Printf.printf "the 63th bit of L1 table entry: 1 if its refcount is exactly one\n" ;
-  let x = (t <| 1) |> 9 in
-  Cluster.(div x (one <| cluster_bits))
+    Printf.printf "MingL: the 63th bit of L1 table entry: 1 -> its refcount is exactly one\n" ;
+
+  let x = (t <| 55) |> 55 in
+  Printf.printf "MingL: [8 ... 0] bits of L1 table entry: %Ld\n" (Cluster.to_int64 x) ;
+  *)
+
+  let x' = (t <| 8) |> 8 in
+  Printf.printf "MingL: [55 ... 9] bits of L1 table entry: %Ld\n" (Cluster.to_int64 x') ;
+
+  (*
+  let x = (t <| 1) |> 57 in
+  Printf.printf "MingL: [62 ... 56] bits of L1 table entry: %Ld\n" (Cluster.to_int64 x) ;
+
+  Printf.printf "MingL\n" ;
+  *)
+
+  Cluster.(div x' (one <| cluster_bits))
 
 let cluster_in_standard_l2_table_entry = cluster
 
-let compressed_cluster ~cluster_bits t =
-  let x = (t <| 2) |> 2 in
-  Cluster.(div x (one <| cluster_bits))
+let cluster_in_compressed_l2_table_entry ~cluster_bits t =
+  let csize_shift = 62 - (cluster_bits - 8) in
+  let upper_bits = 64 - csize_shift in
+  let x = (t <| upper_bits) |> upper_bits in
+  let sectors = ((t <| 2) |> 2) |> csize_shift in
+  let cluster_size = (one <| cluster_bits) in
+  Cluster.(div x cluster_size, to_int64 (rem x cluster_size), to_int64 sectors)
 
 let within_cluster ~cluster_bits t =
   let x = (t <| 2) |> 2 in
