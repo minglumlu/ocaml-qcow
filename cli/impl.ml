@@ -434,6 +434,7 @@ let sha _common_options_t filename =
   Lwt_main.run t
 
 let decode filename output =
+  Printf.printf "MingL: filename:%s, output:%s" filename output ;
   let module B = Qcow.Make(Block)(Time) in
   let open Lwt in
   let t =

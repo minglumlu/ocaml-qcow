@@ -650,6 +650,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
        is unallocated then return [None]. Note if a [walk_and_allocate] is
        racing with us then we may or may not see the mapping. *)
     let walk_readonly ?client t a =
+      Printf.printf "MingL: %s at line#%d in %s\n" __FUNCTION__ __LINE__ __FILE__ ;
       let open Lwt_error.Infix in
       Locks.with_metadata_lock t.locks
         (fun () ->
@@ -668,7 +669,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
               Locks.unlock l1_lock;
               Lwt.return (Ok None)
             end else begin
-              if Physical.is_compressed l2_table_offset then failwith "compressed";
+              if Physical.is_compressed l2_table_offset then failwith (Printf.sprintf "MingL: compressed at line#%d" __LINE__) ;
               Lwt.return (Ok (Some l2_table_offset))
             end
           ) >>|= fun l2_table_offset ->
@@ -681,7 +682,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
               Locks.unlock l2_lock;
               Lwt.return (Ok None)
             end else begin
-              if Physical.is_compressed cluster_offset then failwith "compressed";
+              if Physical.is_compressed cluster_offset then failwith (Printf.sprintf "MingL: compressed at line#%d" __LINE__) ;
               Lwt.return (Ok (Some cluster_offset))
             end
           ) >>|= fun cluster_offset ->
@@ -752,7 +753,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
                     Lwt.return_unit
                   )
                end else begin
-                 if Physical.is_compressed data_offset then failwith "compressed";
+                 if Physical.is_compressed data_offset then failwith (Printf.sprintf "MingL: compressed at line#%d" __LINE__) ;
                  Lwt.return (Ok (data_offset, l1_lock, l2_lock))
                end
              end
@@ -1082,6 +1083,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
     let map = make ~free ~refs:(!refs) ~first_movable_cluster ~cache:t.cache
       ~runtime_asserts:t.config.Config.runtime_asserts
       ~id ~cluster_size:(Int64.to_int cluster_size) in
+    Printf.printf "MingL: make_cluster_map done\n" ;
 
     Lwt.return (Ok map)
 
@@ -1224,7 +1226,9 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
   let time_30s = 30_000_000_000L
 
   let read t sector bufs =
+    (* Printf.printf "MingL: %s at line#%d in %s\n" __FUNCTION__ __LINE__ __FILE__ ; *)
     let describe_fn () = Printf.sprintf "read sector = %Ld length = %d" sector (Cstructs.len bufs) in
+    Printf.printf "MingL: %s\n" (describe_fn ()) ;
     with_deadline t describe_fn time_30s
       (fun () ->
         let open Lwt_error.Infix in
