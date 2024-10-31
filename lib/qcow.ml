@@ -160,6 +160,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
     >>= fun (c, lock) ->
     let addresses = Metadata.Physical.of_contents c in
     let within = Physical.within_cluster ~cluster_bits:t.cluster_bits offset in
+    Printf.printf "MingL:       unmarshal_physical_address read 8 bytes on offset %d -> host cluster (%Ld) within host offset (%d) - in %s\n"
+      (Physical.to_bytes offset) (Cluster.to_int64 cluster) within __FILE__ ;
     Lwt.return (Ok (Metadata.Physical.get addresses within, lock))
 
   let adapt_error : B.error -> error = function
@@ -582,6 +584,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
     let read_l1_table ?client t l1_index =
       (* Read l1[l1_index] as a 64-bit offset *)
       let l1_index_offset = Physical.shift t.h.Header.l1_table_offset (8 * (Int64.to_int l1_index)) in
+      Printf.printf "MingL:     read_l1_table for l1_index %Ld\n" l1_index ;
       unmarshal_physical_address ?client t l1_index_offset
 
     (* Find the first l1_index whose values satisfies [f] *)
@@ -593,6 +596,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
         then Lwt.return (Ok None)
         else begin
           let l1_index_offset = Physical.shift t.h.Header.l1_table_offset (8 * (Int64.to_int l1_index)) in
+          Printf.printf "MingL: l1_index_offset %d - %s at line#%d in %s\n"
+            (Physical.to_bytes l1_index_offset) __FUNCTION__ __LINE__ __FILE__ ;
 
           let cluster = Physical.cluster ~cluster_bits:t.cluster_bits l1_index_offset in
 
@@ -631,6 +636,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
 
     let read_l2_table ?client t l2_table_offset l2_index =
       let l2_index_offset = Physical.shift l2_table_offset (8 * (Int64.to_int l2_index)) in
+      Printf.printf "MingL:     read_l2_table for l2_table_offset (%d) and l2_index (%Ld)\n"  (Physical.to_bytes l2_table_offset) l2_index ;
       unmarshal_physical_address ?client t l2_index_offset
 
     let write_l2_table ?client t l2_table_offset l2_index cluster =
@@ -650,7 +656,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
        is unallocated then return [None]. Note if a [walk_and_allocate] is
        racing with us then we may or may not see the mapping. *)
     let walk_readonly ?client t a =
-      Printf.printf "MingL: %s at line#%d in %s\n" __FUNCTION__ __LINE__ __FILE__ ;
+      Printf.printf "MingL:     walk_readonly: virtual address %s - in %s\n" (Virtual.to_string a) __FILE__ ;
       let open Lwt_error.Infix in
       Locks.with_metadata_lock t.locks
         (fun () ->
@@ -662,14 +668,14 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
             m >>= function
             | Error x -> Lwt.return (Error x)
             | Ok None -> Lwt.return (Ok None)
-            | Ok (Some x) -> f x in
+            | Ok (Some x) -> f x
+          in
 
           (* Look up an L2 table *)
           ( if Physical.to_bytes l2_table_offset = 0 then begin
               Locks.unlock l1_lock;
               Lwt.return (Ok None)
             end else begin
-              if Physical.is_compressed l2_table_offset then failwith (Printf.sprintf "MingL: compressed at line#%d" __LINE__) ;
               Lwt.return (Ok (Some l2_table_offset))
             end
           ) >>|= fun l2_table_offset ->
@@ -682,12 +688,19 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
               Locks.unlock l2_lock;
               Lwt.return (Ok None)
             end else begin
-              if Physical.is_compressed cluster_offset then failwith (Printf.sprintf "MingL: compressed at line#%d" __LINE__) ;
               Lwt.return (Ok (Some cluster_offset))
             end
           ) >>|= fun cluster_offset ->
-          let p = Physical.shift cluster_offset (Int64.to_int a.Virtual.cluster) in
-          Lwt.return (Ok (Some (p, l1_lock, l2_lock)))
+          match Physical.is_compressed cluster_offset with
+          | true -> (
+              let p = Physical.shift cluster_offset (Int64.to_int a.Virtual.cluster) in
+              Printf.printf "MingL:     host offset (%d) - in %s\n" (Physical.to_bytes p) __FILE__ ;
+              failwith (Printf.sprintf "MingL: compressed at line#%d" __LINE__)
+          )
+          | false -> (
+              let p = Physical.shift cluster_offset (Int64.to_int a.Virtual.cluster) in
+              Lwt.return (Ok (Some (p, l1_lock, l2_lock)))
+          )
       )
     (* Walk the L1 and L2 tables to translate an address, allocating missing
        entries as we go. *)
@@ -849,17 +862,23 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
        - each [buffer] is as large as possible (so for example if we supply
          one large buffer it will only be fragmented to the minimum extent. *)
   let rec chop_into_aligned alignment ofs = function
-    | [] -> []
-    | buf :: bufs ->
-      (* If we're not aligned, sync to the next boundary *)
-      let into = Int64.(to_int (sub alignment (rem ofs alignment))) in
-      if Cstruct.length buf > into then begin
-        let this = ofs, Cstruct.sub buf 0 into in
-        let rest = chop_into_aligned alignment Int64.(add ofs (of_int into)) (Cstruct.shift buf into :: bufs) in
-        this :: rest
-      end else begin
-        (ofs, buf) :: (chop_into_aligned alignment Int64.(add ofs (of_int (Cstruct.length buf))) bufs)
-      end
+    | [] -> (
+        []
+    )
+    | buf :: bufs -> (
+        (* If we're not aligned, sync to the next boundary *)
+        let into = Int64.(to_int (sub alignment (rem ofs alignment))) in
+        Printf.printf "MingL: offset (%Ld) into/remaining in alignment/cluster (%d) -  %s at line#%d in %s\n" ofs into __FUNCTION__ __LINE__ __FILE__ ;
+        if Cstruct.length buf > into then begin
+          Printf.printf "MingL: split buf as it is more than into -  %s at line#%d in %s\n" __FUNCTION__ __LINE__ __FILE__ ;
+          let this = ofs, Cstruct.sub buf 0 into in
+          let rest = chop_into_aligned alignment Int64.(add ofs (of_int into)) (Cstruct.shift buf into :: bufs) in
+          this :: rest
+        end else begin
+          Printf.printf "MingL: use the whole buf as it is <= into - %s at line#%d in %s\n" __FUNCTION__ __LINE__ __FILE__ ;
+          (ofs, buf) :: (chop_into_aligned alignment Int64.(add ofs (of_int (Cstruct.length buf))) bufs)
+        end
+    )
 
   type work = {
     sector: int64; (* starting sector of the operaiton *)
@@ -1226,9 +1245,8 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
   let time_30s = 30_000_000_000L
 
   let read t sector bufs =
-    (* Printf.printf "MingL: %s at line#%d in %s\n" __FUNCTION__ __LINE__ __FILE__ ; *)
-    let describe_fn () = Printf.sprintf "read sector = %Ld length = %d" sector (Cstructs.len bufs) in
-    Printf.printf "MingL: %s\n" (describe_fn ()) ;
+    Printf.printf "MingL: %s at line#%d in %s\n" __FUNCTION__ __LINE__ __FILE__ ;
+    let describe_fn () = Printf.sprintf "qcow read sector = %Ld length = %d" sector (Cstructs.len bufs) in
     with_deadline t describe_fn time_30s
       (fun () ->
         let open Lwt_error.Infix in
@@ -1240,21 +1258,28 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
         Error.Lwt_error.List.map_p
           (fun (byte, buf) ->
             let vaddr = Virtual.make ~cluster_bits:t.cluster_bits byte in
+            Printf.printf "MingL: %s at line#%d in %s\n" __FUNCTION__ __LINE__ __FILE__ ;
             ClusterIO.walk_readonly ~client t vaddr
             >>= function
-            | None ->
+            | None -> (
+              Printf.printf "MingL: %s at line#%d in %s\n" __FUNCTION__ __LINE__ __FILE__ ;
               Cstruct.memset buf 0;
               Lwt.return (Ok None) (* no work to do *)
-            | Some (offset', l1_lock, l2_lock) ->
+            )
+            | Some (offset', l1_lock, l2_lock) -> (
+              Printf.printf "MingL: %s at line#%d in %s\n" __FUNCTION__ __LINE__ __FILE__ ;
               let sector = Physical.sector ~sector_size:t.sector_size offset' in
               Lwt.return (Ok (Some { sector; bufs = [ buf ]; metadata_locks = [ l1_lock; l2_lock ] }))
+            )
           ) (chop_into_aligned cluster_size byte bufs)
         >>= fun work ->
+        Printf.printf "MingL: %s at line#%d in %s\n" __FUNCTION__ __LINE__ __FILE__ ;
         let work' = List.rev @@ List.fold_left (fun acc x -> match x with None -> acc | Some y -> y :: acc) [] work in
         (* work may contain contiguous items *)
         let work = coalesce_into_adjacent t.sector_size work' in
         let open Lwt.Infix in
         iter_p (fun work ->
+          Printf.printf "MingL: %s at line#%d in %s\n" __FUNCTION__ __LINE__ __FILE__ ;
           let first = Cluster.of_int64 Int64.(div work.sector (of_int sectors_per_cluster)) in
           let last_sector = Int64.(add work.sector (of_int (Cstructs.len work.bufs / t.sector_size))) in
           let last_sector' = Int64.(round_up last_sector (of_int sectors_per_cluster)) in
@@ -1265,6 +1290,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
                 (fun () ->
                   Lwt.catch
                     (fun () ->
+                      Printf.printf "MingL: %s at line#%d in %s\n" __FUNCTION__ __LINE__ __FILE__ ;
                       B.read t.base work.sector work.bufs
                     ) (fun e ->
                       Log.err (fun f -> f "%s: low-level I/O exception %s" (describe_fn ()) (Printexc.to_string e));
@@ -1385,6 +1411,7 @@ module Make(Base: Qcow_s.RESIZABLE_BLOCK)(Time: Mirage_time.S) = struct
     )
 
   let seek_mapped t from =
+    Printf.printf "MingL: %s at line#%d in %s\n" __FUNCTION__ __LINE__ __FILE__ ;
     let open Lwt_error.Infix in
     let bytes = Int64.(mul from (of_int t.sector_size)) in
     let int64s_per_cluster = 1L <| (Int32.to_int t.h.Header.cluster_bits - 3) in

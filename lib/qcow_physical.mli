@@ -63,7 +63,7 @@ val cluster_in_standard_l2_table_entry: cluster_bits:int -> t -> Cluster.t
 (** Return the cluster pointed by the l2 table entry *)
 
 val cluster_in_compressed_l2_table_entry: cluster_bits:int -> t -> Cluster.t * int64 * int64
-(** Return the host offset of the cluster pointed by the l2 table entry *)
+(** Return the host cluster offset of the cluster pointed by the l2 table entry *)
 
 val within_cluster: cluster_bits:int -> t -> int
 (** Return the index within the cluster of the address *)

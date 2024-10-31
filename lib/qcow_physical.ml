@@ -30,8 +30,22 @@ let one = Cluster.succ Cluster.zero
 let make ?(is_mutable = false) ?(is_compressed = false) x =
   let x = Cluster.of_int x in
   let bytes = (x <| 2) |> 2 in
-  let is_mutable = if is_mutable then one <| 63 else Cluster.zero in
-  let is_compressed = if is_compressed then one <| 62 else Cluster.zero in
+  let is_mutable =
+    if is_mutable then (
+      Printf.printf "MingL: is mutable\n" ;
+      one <| 63
+    )
+    else (
+      Printf.printf "MingL: is not mutable\n" ;
+      Cluster.zero
+    )
+  in
+  let is_compressed =
+    if is_compressed then
+      one <| 62
+    else
+      Cluster.zero
+  in
   Cluster.(logor (logor bytes is_mutable) is_compressed)
 
 let is_mutable t = t |> 63 <> Cluster.zero
@@ -44,6 +58,8 @@ let shift t bytes =
   let is_mutable = is_mutable t in
   let is_compressed = is_compressed t in
   make ~is_mutable ~is_compressed (Cluster.(to_int @@ add bytes' bytes))
+
+let shift_within_compressed_cluster ~cluster_bits l2_entry bytes =
 
 let sector ~sector_size t =
   let x = (t <| 2) |> 2 in

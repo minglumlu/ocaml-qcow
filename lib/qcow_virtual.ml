@@ -31,6 +31,8 @@ let make ~cluster_bits x =
   let l1_index = x |> (l2_bits + cluster_bits) in
   let l2_index = (x <| (64 - l2_bits - cluster_bits)) |> (64 - l2_bits) in
   let cluster  = (x <| (64 - cluster_bits)) |> (64 - cluster_bits) in
+  Printf.printf "Ming:      virtual address (%Ld) is mapped to l1_index (%Ld), l2_index (%Ld), and offset within the cluster (%Ld)\n"
+    x l1_index l2_index cluster ;
   { l1_index; l2_index; cluster }
 
 let to_offset ~cluster_bits t =

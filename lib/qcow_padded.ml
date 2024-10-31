@@ -25,6 +25,7 @@ module Make(B: Qcow_s.RESIZABLE_BLOCK) = struct
     | e -> Format.kasprintf Lwt.fail_with "Unknown error: %a" B.pp_error e
 
   let read base base_sector buf =
+    Printf.printf "MingL: %s at line#%d in %s\n" __FUNCTION__ __LINE__ __FILE__ ;
     let open Lwt in
     B.get_info base
     >>= fun base_info ->
